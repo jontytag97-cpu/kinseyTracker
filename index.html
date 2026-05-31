@@ -169,6 +169,12 @@ header h1{
 .foodrow:active{background:var(--sage-soft);border-color:var(--sage);}
 .foodmac{font-size:11.5px;color:var(--ink-faint);font-weight:500;}
 #pick-results{max-height:38vh;overflow-y:auto;}
+/* water quick-add */
+.water-btns{display:flex;gap:8px;}
+.water-btns button{flex:1;border:1px solid var(--line);background:var(--card);border-radius:12px;padding:10px 6px;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--ink);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:1px;}
+.water-btns button small{font-size:10px;color:var(--ink-faint);font-weight:500;}
+.water-btns button:active{background:#e8f4fa;border-color:#7fc6e3;}
+.water-btns button.undo{flex:0 0 46px;justify-content:center;font-size:20px;color:var(--ink-soft);}
 
 /* generic buttons */
 .btn{
@@ -319,6 +325,8 @@ svg.chart{width:100%;display:block;overflow:visible;}
     <div class="card">
       <div class="card-head"><h2>Meals</h2><button class="linkbtn" onclick="switchView('meals')">Edit week</button></div>
       <div id="today-meals"></div>
+      <div id="today-extras"></div>
+      <button class="btn btn-line" style="margin-top:12px" onclick="openExtra()">+ Add something extra</button>
     </div>
 
     <div class="card">
@@ -327,6 +335,20 @@ svg.chart{width:100%;display:block;overflow:visible;}
         <input type="number" id="steps-in" placeholder="0" inputmode="numeric" onchange="logSteps(this.value)">
       </div>
       <div class="pbar"><div class="fill" id="steps-fill" style="width:0%;background:linear-gradient(90deg,var(--gold),#e0b25a)"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Water</h2><span class="sub" id="water-target">of 2 L</span></div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px">
+        <div style="font-family:'Fraunces',serif;font-size:34px;font-weight:500;line-height:1" id="water-amount">0 L</div>
+        <div class="sub" id="water-glasses">0 glasses</div>
+      </div>
+      <div class="pbar" style="margin-bottom:13px"><div class="fill" id="water-fill" style="width:0%;background:linear-gradient(90deg,#4ea3c9,#7fc6e3)"></div></div>
+      <div class="water-btns">
+        <button onclick="addWater(250)">＋ Glass<small>250ml</small></button>
+        <button onclick="addWater(600)">＋ Bottle<small>600ml</small></button>
+        <button class="undo" onclick="addWater(-250)">−</button>
+      </div>
     </div>
   </section>
 
@@ -495,7 +517,7 @@ const FOODS=[
 /* ---------- defaults ---------- */
 const DEFAULTS = {
   settings:{
-    calTarget:1650, proGood:80, proGreat:130, fatTarget:55, carbTarget:165, stepTarget:8000,
+    calTarget:1650, proGood:80, proGreat:130, fatTarget:55, carbTarget:165, stepTarget:8000, waterTarget:2000,
     goalLow:55, goalHigh:60, startWeight:65
   },
   ingredients:[],
@@ -543,7 +565,7 @@ function save(){ try{localStorage.setItem('kinsey_v1', JSON.stringify(state));}c
 function todayKey(d){ d=d||new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function parseKey(k){ const[y,m,d]=k.split('-').map(Number); return new Date(y,m-1,d); }
 function fmtShort(k){ const d=parseKey(k); return d.toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'}); }
-function day(k){ k=k||selDate; if(!state.days[k]) state.days[k]={eaten:{},weight:null,steps:null,waist:null,sessions:{},notes:{}}; return state.days[k]; }
+function day(k){ k=k||selDate; if(!state.days[k]) state.days[k]={eaten:{},extras:[],water:0,weight:null,steps:null,waist:null,sessions:{},notes:{}}; const d=state.days[k]; if(!d.extras)d.extras=[]; if(d.water==null)d.water=0; return d; }
 
 /* ---------- nav ---------- */
 function switchView(v){
@@ -587,6 +609,7 @@ function defaultAmount(meal){
 function dayMacros(k){
   const dd=day(k); let cal=0,pro=0;
   state.meals.forEach(m=>{ const a=dd.eaten[m.id]; if(a){ const lm=loggedMacros(m,a); cal+=lm.cal; pro+=lm.pro; } });
+  (dd.extras||[]).forEach(e=>{ cal+=(+e.cal||0); pro+=(+e.pro||0); });
   return {cal:Math.round(cal),pro:Math.round(pro)};
 }
 function ring(id,pct,color,num,unit){
@@ -651,11 +674,95 @@ function renderToday(){
       </div>`;
     ml.appendChild(div);
   });
+  // extras (one-off items for this day)
+  const ex=document.getElementById('today-extras'); ex.innerHTML='';
+  (dd.extras||[]).forEach(item=>{
+    const div=document.createElement('div'); div.className='meal';
+    div.innerHTML=`
+      <div class="check on" style="background:var(--gold);border-color:var(--gold)">+</div>
+      <div class="meal-body">
+        <div class="meal-slot" style="color:var(--gold)">Extra today</div>
+        <div class="meal-name">${esc(item.name)}</div>
+        <div class="meal-macros"><b style="color:var(--ink)">${Math.round(item.cal)} kcal · ${Math.round(item.pro)}g</b></div>
+      </div>
+      <button class="ingx" onclick="removeExtra('${item.id}')">✕</button>`;
+    ex.appendChild(div);
+  });
   // steps
   document.getElementById('steps-target').textContent='target '+s.stepTarget.toLocaleString();
   document.getElementById('steps-in').value=dd.steps||'';
   document.getElementById('steps-fill').style.width=Math.min((dd.steps||0)/s.stepTarget,1)*100+'%';
+  // water
+  renderWater();
 }
+function renderWater(){
+  const s=state.settings, dd=day(selDate);
+  const target=s.waterTarget||2000, ml=dd.water||0;
+  const litres=(ml/1000).toFixed(ml%1000===0?0:2);
+  document.getElementById('water-amount').textContent=litres+' L';
+  document.getElementById('water-target').textContent='of '+(target/1000).toFixed(target%1000===0?0:1)+' L';
+  document.getElementById('water-fill').style.width=Math.min(ml/target,1)*100+'%';
+  document.getElementById('water-glasses').textContent=Math.round(ml/250)+' glass'+(Math.round(ml/250)===1?'':'es');
+}
+function addWater(ml){ const dd=day(selDate); dd.water=Math.max(0,(dd.water||0)+ml); save(); renderWater(); }
+
+/* ---------- EXTRAS (one-off items for a single day) ---------- */
+let extraSel=null;
+function openExtra(){ extraSel=null; renderExtraSheet(); }
+function renderExtraSheet(){
+  let foodStep='';
+  if(extraSel){
+    foodStep=`<div class="summary" style="margin-bottom:14px">
+      <div class="srow hi"><span>${esc(extraSel.n)}</span><b id="ex-calc">—</b></div>
+      <div class="field" style="margin:10px 0 0"><label>How much? (grams)</label>
+        <input id="ex-g" type="number" inputmode="numeric" value="100" oninput="exCalc()" onfocus="this.select()"></div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="addExtraFromFood()">Add to today</button>
+      <button class="linkbtn" style="display:block;margin:12px auto 0" onclick="extraSel=null;renderExtraSheet()">← pick a different food</button>
+    </div>`;
+  }
+  openSheet(`<h3>Add something extra</h3>
+    <p class="sub" style="margin:4px 0 12px">Logs to <b>today only</b> — won't change Kinsey's weekly meals.</p>
+    ${extraSel?foodStep:`
+    <input id="ex-q" placeholder="Search a food e.g. almonds, latte, banana…" oninput="extraFilter(this.value)" autocomplete="off">
+    <div id="ex-results" style="margin-top:10px"></div>
+    <div class="divider"></div>
+    <div class="eyebrow" style="margin-bottom:8px">Or enter it manually</div>
+    <div class="field"><label>Name</label><input id="exm-n" placeholder="e.g. Flat white"></div>
+    <div class="row2">
+      <div class="field"><label>Calories</label><input id="exm-cal" type="number" inputmode="numeric" placeholder="kcal"></div>
+      <div class="field"><label>Protein (g)</label><input id="exm-pro" type="number" inputmode="numeric" placeholder="g"></div>
+    </div>
+    <button class="btn btn-line" onclick="addExtraManual()">Add to today</button>`}`);
+  if(!extraSel) extraFilter('');
+}
+function extraFilter(q){
+  const list=allFoods(); const ql=q.trim().toLowerCase();
+  const matches=(ql?list.filter(f=>f.n.toLowerCase().includes(ql)):list).slice(0,40);
+  const el=document.getElementById('ex-results'); if(!el)return;
+  if(!matches.length){ el.innerHTML='<div class="empty" style="padding:10px">No match — use manual entry below.</div>'; return; }
+  el.innerHTML=matches.map(f=>`<div class="foodrow" onclick="selectExtraFood(${JSON.stringify(f.n).replace(/"/g,'&quot;')},${f.k},${f.p})">
+    <span>${esc(f.n)}</span><span class="foodmac">${f.k} kcal · ${f.p}g</span></div>`).join('');
+}
+function selectExtraFood(n,k,p){ extraSel={n,k,p}; renderExtraSheet(); exCalc(); }
+function exCalc(){
+  const g=parseFloat(document.getElementById('ex-g').value)||0;
+  document.getElementById('ex-calc').textContent=Math.round(g/100*extraSel.k)+' kcal · '+(g/100*extraSel.p).toFixed(1)+'g';
+}
+function addExtraFromFood(){
+  const g=parseFloat(document.getElementById('ex-g').value)||0;
+  if(g<=0){toast('Enter the grams');return;}
+  day(selDate).extras.push({id:'x'+Date.now(), name:extraSel.n+' ('+Math.round(g)+'g)', cal:g/100*extraSel.k, pro:g/100*extraSel.p});
+  save(); closeModal(); renderToday(); toast('Added to today');
+}
+function addExtraManual(){
+  const n=document.getElementById('exm-n').value.trim();
+  const cal=parseFloat(document.getElementById('exm-cal').value)||0;
+  const pro=parseFloat(document.getElementById('exm-pro').value)||0;
+  if(!n){toast('Give it a name');return;}
+  day(selDate).extras.push({id:'x'+Date.now(), name:n, cal, pro});
+  save(); closeModal(); renderToday(); toast('Added to today');
+}
+function removeExtra(id){ const dd=day(selDate); dd.extras=dd.extras.filter(e=>e.id!==id); save(); renderToday(); }
 function toggleMeal(id){ const dd=day(selDate); const meal=state.meals.find(m=>m.id===id); if(dd.eaten[id]){delete dd.eaten[id];}else{dd.eaten[id]=defaultAmount(meal);} save(); renderToday(); }
 function stepInc(unit){ return (unit==='g'||unit==='ml')?25:0.5; }
 function roundAmt(unit,x){ return (unit==='g'||unit==='ml')?Math.round(x):Math.round(x*2)/2; }
@@ -1019,6 +1126,10 @@ function openSettings(){
       <div class="field"><label>Steps</label><input id="st-step" type="number" value="${s.stepTarget}"></div>
     </div>
     <div class="row2">
+      <div class="field"><label>Water (ml)</label><input id="st-water" type="number" value="${s.waterTarget||2000}"></div>
+      <div class="field"></div>
+    </div>
+    <div class="row2">
       <div class="field"><label>Protein "good" (g)</label><input id="st-pg" type="number" value="${s.proGood}"></div>
       <div class="field"><label>Protein "great" (g)</label><input id="st-pgr" type="number" value="${s.proGreat}"></div>
     </div>
@@ -1036,7 +1147,7 @@ function openSettings(){
 }
 function saveSettings(){
   const g=id=>parseFloat(document.getElementById(id).value);
-  Object.assign(state.settings,{calTarget:g('st-cal')||1650,stepTarget:g('st-step')||8000,proGood:g('st-pg')||80,proGreat:g('st-pgr')||130,goalLow:g('st-gl')||55,goalHigh:g('st-gh')||60});
+  Object.assign(state.settings,{calTarget:g('st-cal')||1650,stepTarget:g('st-step')||8000,waterTarget:g('st-water')||2000,proGood:g('st-pg')||80,proGreat:g('st-pgr')||130,goalLow:g('st-gl')||55,goalHigh:g('st-gh')||60});
   save(); closeModal(); renderAll(); toast('Settings saved');
 }
 function exportData(){
